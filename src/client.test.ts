@@ -4,10 +4,16 @@ import type { FetchLike } from './index.js';
 
 const TOKEN = 'bead807bac9ceeb6588f10667d78a9f7';
 const FRESH = 'fresh0000000000000000000000token';
+/** The server-side session KT binds the fresh token to at login (real KT: a 302 to /login without it). */
+const JSESSION = 'J-SESSION-0001';
 const PASSWORD = 'tajné heslo';
 
-const json = (body: unknown, init: ResponseInit = {}): Response =>
-  new Response(JSON.stringify(body), { status: 200, ...init, headers: { 'Content-Type': 'application/json;charset=UTF-8', ...init.headers } });
+const json = (body: unknown, init: ResponseInit = {}): Response => {
+  // `new Headers(init)` keeps repeated Set-Cookie lines; spreading a Headers object would drop them.
+  const headers = new Headers(init.headers);
+  headers.set('Content-Type', 'application/json;charset=UTF-8');
+  return new Response(JSON.stringify(body), { status: 200, ...init, headers });
+};
 const ok = (data: unknown) => json({ requestId: null, code: 0, message: null, data });
 const loginPage = (): Response => new Response('<!DOCTYPE html><html>Přihlášení</html>', { headers: { 'Content-Type': 'text/html' } });
 
@@ -43,13 +49,16 @@ function fakeKt(opts: { valid?: string[]; loginCode?: number; route?: (url: stri
       const code = opts.loginCode ?? (good ? 0 : 1);
       return json(
         { requestId: null, code, message: code === 0 ? null : 'Špatné jméno nebo heslo', data: null },
-        code === 0 ? { headers: { 'Set-Cookie': `${'kaloricketabulky_token'}=${FRESH}; Path=/; HttpOnly` } } : {},
+        code === 0 ? { headers: loginCookies() } : {},
       );
     }
     const custom = opts.route?.(url);
     if (custom !== undefined) return custom;
-    const token = /kaloricketabulky_token=([^;]+)/.exec(headers.get('cookie') ?? '')?.[1];
+    const cookie = headers.get('cookie') ?? '';
+    const token = /kaloricketabulky_token=([^;]+)/.exec(cookie)?.[1];
     if (token === undefined || !valid.has(token)) return loginPage();
+    // Like KT: the token from /login/create is only valid together with its JSESSIONID.
+    if (token === FRESH && !cookie.includes(`JSESSIONID=${JSESSION}`)) return new Response(null, { status: 302, headers: { Location: '/login' } });
     if (url.includes('/statistic/optional/')) return ok(OPTIONAL);
     if (url.includes('/statistic/energy/')) return ok(ENERGY);
     if (url.includes('/statistic/nutrients/')) return ok(NUTRIENTS);
@@ -58,6 +67,14 @@ function fakeKt(opts: { valid?: string[]; loginCode?: number; route?: (url: stri
     return new Response('not found', { status: 404 });
   };
   return { fetchFn, sent };
+}
+
+function loginCookies(): Headers {
+  const h = new Headers();
+  h.append('Set-Cookie', 'org.springframework.web.servlet.i18n.CookieLocaleResolver.LOCALE=cs; Path=/');
+  h.append('Set-Cookie', `JSESSIONID=${JSESSION}; Path=/; Secure; HttpOnly`);
+  h.append('Set-Cookie', `kaloricketabulky_token=${FRESH}; Max-Age=2592000; Path=/; Secure; HttpOnly`);
+  return h;
 }
 
 async function caught(promise: Promise<unknown>): Promise<KalorickeTabulkyError> {
@@ -93,6 +110,14 @@ describe('construction', () => {
     expect(() => new KalorickeTabulkyClient({ email: ' ', password: 'x' })).toThrow(/e-mail/);
     expect(() => new KalorickeTabulkyClient({ email: 'a@b.cz', password: '' })).toThrow(/password/);
     expect(() => new KalorickeTabulkyClient({ email: 'a@b.cz', passwordMd5: 'nope' })).toThrow(/MD5/);
+  });
+
+  it('accepts a session as a Cookie header (also with a Cookie: prefix) and rejects one without the token', () => {
+    const client = new KalorickeTabulkyClient({ session: `Cookie: JSESSIONID=${JSESSION}; kaloricketabulky_token=${TOKEN};` });
+    expect(client.getToken()).toBe(TOKEN);
+    expect(client.getSession()).toBe(`JSESSIONID=${JSESSION}; kaloricketabulky_token=${TOKEN}`);
+    expect(() => new KalorickeTabulkyClient({ session: 'JSESSIONID=x' })).toThrow(/no valid kaloricketabulky_token/);
+    expect(() => new KalorickeTabulkyClient({ session: 'a=1; =2' })).toThrow(/malformed cookie/);
   });
 
   it('exposes the token it was given', () => {
@@ -190,6 +215,11 @@ describe('e-mail/password client', () => {
     expect(logins).toHaveLength(1);
     expect(JSON.parse(logins[0]?.body ?? 'null')).toEqual({ email: 'me@example.cz', password: hashKtPassword(PASSWORD) });
     expect(client.getToken()).toBe(FRESH);
+    expect(client.getSession()).toBe(
+      `org.springframework.web.servlet.i18n.CookieLocaleResolver.LOCALE=cs; JSESSIONID=${JSESSION}; kaloricketabulky_token=${FRESH}`,
+    );
+    // Regression: every statistic call carries the JSESSIONID from the login, not just the token.
+    for (const sent of kt.sent.filter((x) => x.url.includes('/statistic/'))) expect(sent.cookie).toContain(`JSESSIONID=${JSESSION}`);
     // The plain password never leaves the process.
     expect(JSON.stringify(kt.sent)).not.toContain(PASSWORD);
   });
@@ -219,6 +249,42 @@ describe('e-mail/password client', () => {
     expect(e.code).toBe('LOGIN_FAILED');
     expect(kt.sent.filter((s) => s.url.includes('/login/'))).toHaveLength(1);
     expect(kt.sent.filter((s) => s.url.includes('/statistic/'))).toHaveLength(1);
+  });
+
+  it('a saved getSession() works in a new client without logging in again', async () => {
+    const kt = fakeKt();
+    const first = new KalorickeTabulkyClient({ email: 'me@example.cz', password: PASSWORD, fetch: kt.fetchFn });
+    await first.getEnergy('2026-11-01', '2026-11-17');
+    const saved = first.getSession();
+    if (saved === null) throw new Error('no session');
+    const second = new KalorickeTabulkyClient({ email: 'me@example.cz', password: PASSWORD, session: saved, fetch: kt.fetchFn });
+    await second.getNutrients('2026-11-01', '2026-11-17');
+    expect(kt.sent.filter((x) => x.url.includes('/login/'))).toHaveLength(1);
+  });
+
+  it('follows a rotated JSESSIONID but ignores a cleared token', async () => {
+    const answers = [
+      ok(ENERGY),
+      new Response(JSON.stringify({ requestId: null, code: 0, message: null, data: ENERGY }), {
+        headers: { 'Content-Type': 'application/json', 'Set-Cookie': 'JSESSIONID=J-ROTATED; Path=/' },
+      }),
+    ];
+    const seen: (string | null)[] = [];
+    const client = new KalorickeTabulkyClient({
+      session: `JSESSIONID=${JSESSION}; kaloricketabulky_token=${TOKEN}`,
+      fetch: async (_url, init) => {
+        seen.push(new Headers(init.headers).get('cookie'));
+        const h = new Headers({ 'Content-Type': 'application/json' });
+        h.append('Set-Cookie', 'JSESSIONID=J-ROTATED; Path=/');
+        h.append('Set-Cookie', 'kaloricketabulky_token=; Max-Age=0; Path=/');
+        return answers.shift() ?? new Response(JSON.stringify({ requestId: null, code: 0, message: null, data: ENERGY }), { headers: h });
+      },
+    });
+    await client.getEnergy('2026-11-01', '2026-11-17');
+    await client.getEnergy('2026-11-01', '2026-11-17');
+    await client.getEnergy('2026-11-01', '2026-11-17');
+    expect(seen[2]).toContain('JSESSIONID=J-ROTATED');
+    expect(client.getToken()).toBe(TOKEN);
   });
 
   it('login() can be called explicitly to verify credentials', async () => {

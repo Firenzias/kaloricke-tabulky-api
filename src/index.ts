@@ -7,6 +7,7 @@ export type {
   KtPasswordCredentials,
   KtPasswordHashCredentials,
   KtStatisticKind,
+  KtSessionCredentials,
   KtTokenCredentials,
 } from './client.js';
 export { toKtDate, toKtRange } from './dates.js';

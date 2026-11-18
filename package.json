@@ -1,6 +1,6 @@
 {
   "name": "kaloricke-tabulky-api",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Typed, validated Node.js client for the unofficial Kalorické tabulky (kaloricketabulky.cz) JSON API",
   "license": "MIT",
   "type": "module",

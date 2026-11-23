@@ -36,6 +36,28 @@ export const ktSeriesValueSchema = z
   .passthrough();
 export type KtSeriesValue = z.infer<typeof ktSeriesValueSchema>;
 
+/** KT sometimes wraps a point as `{ value: point, target }`. */
+export const ktWrappedSeriesValueSchema = z.object({ value: ktSeriesValueSchema, target: z.unknown().optional() }).passthrough();
+
+/**
+ * Checks every entry on its own (flat point or wrapped point), drops malformed ones, flattens and
+ * dedupes by `guid` (by `from` when there is no guid). A single odd entry never fails the response.
+ */
+export function flattenKtSeriesValues(entries: readonly unknown[]): KtSeriesValue[] {
+  const seen = new Set<string>();
+  const out: KtSeriesValue[] = [];
+  for (const entry of entries) {
+    const flat = ktSeriesValueSchema.safeParse(entry);
+    const point = flat.success ? flat.data : ktWrappedSeriesValueSchema.safeParse(entry).data?.value;
+    if (point === undefined) continue;
+    const key = point.guid != null ? `g:${point.guid}` : `f:${point.from}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(point);
+  }
+  return out;
+}
+
 export const ktSeriesSchema = z
   .object({
     guid: z.string().nullish(),
@@ -49,7 +71,8 @@ export const ktSeriesSchema = z
     nutrientsValues: z.array(z.unknown()).nullish(),
     nutrientsTableData: z.array(z.unknown()).nullish(),
     target: z.unknown().optional(),
-    values: z.array(ktSeriesValueSchema).nullish(),
+    /** Raw and lossless (the app archives it as KT sent it); consumers call `flattenKtSeriesValues`. */
+    values: z.array(z.unknown()).nullish(),
   })
   .passthrough();
 export type KtSeries = z.infer<typeof ktSeriesSchema>;
@@ -122,6 +145,32 @@ export type KtEnergyResponse = z.infer<typeof ktEnergyResponseSchema>;
 
 export const ktNutrientsResponseSchema = envelope(ktStatisticObjectSchema.nullish());
 export type KtNutrientsResponse = z.infer<typeof ktNutrientsResponseSchema>;
+
+/* ---------- /statistic/weight: points in `data.target` (object) or `data` itself (array) ---------- */
+
+/** KT does not truncate at `limit`; `page`, `limit` and `targetPaged` are ignored. Entries stay raw. */
+const ktWeightObjectSchema = z
+  .object({
+    type: z.literal('weight'),
+    target: z.array(z.unknown()).nullish(),
+    min: ktNumberishSchema,
+    max: ktNumberishSchema,
+  })
+  .passthrough();
+
+export const ktWeightResponseSchema = envelope(z.union([ktWeightObjectSchema, z.array(z.unknown())]).nullish());
+export type KtWeightResponse = z.infer<typeof ktWeightResponseSchema>;
+
+/** The weight points of either shape; malformed entries are dropped. */
+export function ktWeightPoints(data: KtWeightResponse['data']): KtSeriesValue[] {
+  const entries = Array.isArray(data) ? data : (data?.target ?? []);
+  const points: KtSeriesValue[] = [];
+  for (const entry of entries) {
+    const parsed = ktSeriesValueSchema.safeParse(entry);
+    if (parsed.success) points.push(parsed.data);
+  }
+  return points;
+}
 
 /* ---------- /statistic/summary/{date} and /user/weight/add ---------- */
 

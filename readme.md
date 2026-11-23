@@ -7,9 +7,11 @@ returned, and the package never holds credentials in its source. You pass them i
 ## Install
 
 ```sh
-npm install kaloricke-tabulky-api            # once published
+npm install "git+https://github.com/Firenzias/kaloricke-tabulky-api.git#v1.2.0"   # a release tag; `prepare` builds dist/
 npm install file:../kaloricke-tabulky-api    # local checkout (run `npm run build` in it first)
 ```
+
+Depend on a release tag, not on `main`. The lockfile then records the exact commit.
 
 ## Usage
 
@@ -40,6 +42,7 @@ Dates are local calendar days given as `YYYY-MM-DD`, `DD.MM.YYYY` or a `Date`.
 | `getOptionalStats(from, to)` | `/statistic/optional/{from}/{to}/get?format=json` |
 | `getEnergy(from, to)` | `/statistic/energy/{from}/{to}/get?format=json` |
 | `getNutrients(from, to)` | `/statistic/nutrients/{from}/{to}/get?format=json` |
+| `getWeight(from, to)` | `/statistic/weight/{from}/{to}/get?format=json` |
 | `getWeightSummary(date?)` | `/statistic/summary/{date}/get?format=json` |
 | `recordWeight(kg, date?)` | `POST /user/weight/add?format=json` |
 | `login()` | `POST /login/create?format=json` (returns the new token) |
@@ -86,3 +89,19 @@ npm run verify   # typecheck + lint + test + build
 ```
 
 The code uses no type assertions, `any`, non-null assertions or `@ts-ignore`, and ESLint enforces this.
+
+## Versioning
+
+The package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The **public API** is everything
+exported from `src/index.ts`: the client and its methods, `KalorickeTabulkyError` and its `code` values, the exported
+schemas and types, and the helper functions.
+
+| Change | Bump |
+| --- | --- |
+| Removing or renaming an export, changing a signature, a result shape or an error `code`, raising the minimum Node version | major |
+| New method, option, export or error `code` that existing callers can ignore | minor |
+| Bug fix, adaptation to a KT change, documentation | patch |
+
+Every release has an entry in [CHANGELOG.md](CHANGELOG.md), a git tag `v<version>` and a GitHub release whose notes are
+that entry. To release: update `CHANGELOG.md`, run `npm run verify`, `npm version <major|minor|patch>`, then
+`git push origin main v<version>` and `gh release create v<version> --notes-file <the entry>`.

@@ -9,9 +9,10 @@ import {
   ktLoginResponseSchema,
   ktNutrientsResponseSchema,
   ktOptionalStatsResponseSchema,
+  ktWeightResponseSchema,
   ktWeightSummaryResponseSchema,
 } from './schemas.js';
-import type { KtEnergyResponse, KtNutrientsResponse, KtOptionalStatsResponse } from './schemas.js';
+import type { KtEnergyResponse, KtNutrientsResponse, KtOptionalStatsResponse, KtWeightResponse } from './schemas.js';
 
 export const KT_BASE_URL = 'https://www.kaloricketabulky.cz';
 export const KT_TOKEN_COOKIE = 'kaloricketabulky_token';
@@ -65,7 +66,7 @@ export interface KtClientSettings {
 export type KalorickeTabulkyClientOptions = KtCredentials & KtClientSettings;
 
 /** The statistic endpoints, `/statistic/{kind}/{from}/{to}/get?format=json`. */
-export type KtStatisticKind = 'optional' | 'energy' | 'nutrients';
+export type KtStatisticKind = 'optional' | 'energy' | 'nutrients' | 'weight';
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -219,6 +220,11 @@ export class KalorickeTabulkyClient {
   /** `/statistic/nutrients/{from}/{to}` – protein, fat, carbs (and fiber) per day, in grams. */
   getNutrients(from: KtDateInput, to: KtDateInput): Promise<KtNutrientsResponse> {
     return this.#statistic('nutrients', from, to, ktNutrientsResponseSchema);
+  }
+
+  /** `/statistic/weight/{from}/{to}` – every weight in the range; read it with `ktWeightPoints`. */
+  getWeight(from: KtDateInput, to: KtDateInput): Promise<KtWeightResponse> {
+    return this.#statistic('weight', from, to, ktWeightResponseSchema);
   }
 
   /** `/statistic/summary/{date}` – the weights recorded in the month around `date` (default today). */

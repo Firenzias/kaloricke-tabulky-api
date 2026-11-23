@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashKtPassword, isKalorickeTabulkyError, KalorickeTabulkyClient, KalorickeTabulkyError, toKtDate, toKtRange } from './index.js';
+import { flattenKtSeriesValues, hashKtPassword, ktWeightPoints, isKalorickeTabulkyError, KalorickeTabulkyClient, KalorickeTabulkyError, toKtDate, toKtRange } from './index.js';
 import type { FetchLike } from './index.js';
 
 const TOKEN = 'bead807bac9ceeb6588f10667d78a9f7';
@@ -140,7 +140,7 @@ describe('token client', () => {
       client.getEnergy('18.10.2026', '17.11.2026'),
       client.getNutrients('2026-10-18', '17.11.2026'),
     ]);
-    expect(optional.data?.[0]?.values?.[0]?.value).toBe(97);
+    expect(flattenKtSeriesValues(optional.data?.[0]?.values ?? [])[0]?.value).toBe(97);
     expect(energy.data?.type).toBe('energy');
     expect(nutrients.data?.nutrientsValues).toHaveLength(1);
     expect(kt.sent.map((s) => s.url).sort()).toEqual([
@@ -179,7 +179,7 @@ describe('token client', () => {
     expect((await caught(client(() => new Response('nope')).getEnergy('2026-11-01', '2026-11-17'))).code).toBe('BAD_RESPONSE');
     const shape = await caught(client(() => ok({ unit: 'kcal' })).getEnergy('2026-11-01', '2026-11-17'));
     expect([shape.code, shape.message]).toEqual(['BAD_RESPONSE', 'Unexpected energy response at data.type: Required.']);
-    const optionalShape = await caught(client(() => ok([{ type: 'x', values: [{ from: 'yesterday' }] }])).getOptionalStats('2026-11-01', '2026-11-17'));
+    const optionalShape = await caught(client(() => ok({ type: 'x', values: [] })).getOptionalStats('2026-11-01', '2026-11-17'));
     expect(optionalShape.code).toBe('BAD_RESPONSE');
 
     const down = new KalorickeTabulkyClient({ token: TOKEN, fetch: () => Promise.reject(new Error('ENOTFOUND')) });
@@ -203,6 +203,92 @@ describe('token client', () => {
     expect(post?.method).toBe('POST');
     expect(JSON.parse(post?.body ?? 'null')).toEqual({ weight: 79.2, date: '17.11.2026' });
     await expect(client.recordWeight(-1)).rejects.toThrow(/Invalid weight/);
+  });
+});
+
+describe('optional series with wrapped values', () => {
+  const A = { guid: 'a', from: 1764198000000, to: null, value: 20.3, valueString: '20,3' };
+  const B = { guid: 'b', from: 1765062000000, to: null, value: 21.3, valueString: '21,3' };
+  const fat = { type: 'Tuky [%]', from: 1763766000000, to: 1795302000000, unit: null, graph: true, values: [A, { value: B, target: null }, { value: A, target: null }] };
+  const optional = (data: unknown) =>
+    new KalorickeTabulkyClient({ token: TOKEN, fetch: fakeKt({ route: (url) => (url.includes('/optional/') ? ok(data) : undefined) }).fetchFn }).getOptionalStats(
+      '2025-01-01',
+      '2026-11-17',
+    );
+
+  it('keeps the response raw and lossless; the helper flattens and dedupes by guid', async () => {
+    const res = await optional([fat]);
+    expect(res.data?.[0]?.values).toEqual(fat.values);
+    expect(flattenKtSeriesValues(res.data?.[0]?.values ?? []).map((v) => v.guid)).toEqual(['a', 'b']);
+  });
+
+  it('reads a series that has only wrapped entries (waist)', async () => {
+    const w = { guid: 'w', from: 1794783600000, to: null, value: 97, valueString: '97' };
+    const res = await optional([{ type: 'Obvod břicha [cm]', unit: null, values: [{ value: w, target: null }] }]);
+    expect(flattenKtSeriesValues(res.data?.[0]?.values ?? [])).toEqual([w]);
+  });
+
+  it('does not fail on a malformed entry: it stays raw and the helper drops it', async () => {
+    const values = [{ from: 'yesterday' }, A, { value: { from: 'x' }, target: null }, 'junk', null];
+    const res = await optional([{ type: 'Tuky [%]', values }]);
+    expect(res.data?.[0]?.values).toEqual(values);
+    expect(flattenKtSeriesValues(res.data?.[0]?.values ?? [])).toEqual([A]);
+  });
+
+  it('a JSON round-trip of the raw optional response equals the raw payload', async () => {
+    const payload = { requestId: null, code: 0, message: null, data: [{ ...fat, extra: { k: 1 } }] };
+    const kt = fakeKt({ route: (url) => (url.includes('/optional/') ? new Response(JSON.stringify(payload)) : undefined) });
+    const res = await new KalorickeTabulkyClient({ token: TOKEN, fetch: kt.fetchFn }).getOptionalStats('2025-01-01', '2026-11-17');
+    expect(JSON.parse(JSON.stringify(res))).toEqual(payload);
+  });
+
+  it('dedupes by from when there is no guid, and exports flattenKtSeriesValues', () => {
+    const p = { from: 5, value: 1 };
+    expect(flattenKtSeriesValues([p, { value: p, target: null }, { from: 6, value: 2 }])).toEqual([p, { from: 6, value: 2 }]);
+    expect(flattenKtSeriesValues([])).toEqual([]);
+  });
+});
+
+describe('weight statistic', () => {
+  const G1 = { guid: 'g1', from: 1764198000000, to: null, value: 72.5, valueString: '72,5', description: null, status: null, systemTime: null, source: null };
+  const G2 = { guid: 'g2', from: 1764284400000, to: null, value: 72.1, valueString: '72,1' };
+  const real = {
+    guid: null, type: 'weight', from: null, to: null, unit: 'kcal', graph: null, nutrientsTarget: [], nutrientsValues: [], nutrientsTableData: [],
+    target: [G1, G2], page: 1, limit: 25, targetPaged: null, valuesPaged: null, tableDataPaged: null, min: 72.1, max: 83.28,
+  };
+  const weight = async (data: unknown) => {
+    const kt = fakeKt({ route: (url) => (url.includes('/statistic/weight/') ? ok(data) : undefined) });
+    const res = await new KalorickeTabulkyClient({ token: TOKEN, fetch: kt.fetchFn }).getWeight('2026-10-18', '2026-11-17');
+    return { res, kt };
+  };
+
+  it('requests /statistic/weight/{from}/{to}/get?format=json with the token cookie', async () => {
+    const { kt } = await weight(real);
+    expect(kt.sent.map((s) => s.url)).toEqual(['https://www.kaloricketabulky.cz/statistic/weight/18.10.2026/17.11.2026/get?format=json']);
+    expect(kt.sent[0]?.cookie).toContain(`kaloricketabulky_token=${TOKEN}`);
+  });
+
+  it('reads the real object shape, keeps it raw and returns the points', async () => {
+    const { res } = await weight(real);
+    expect(JSON.parse(JSON.stringify(res))).toEqual({ requestId: null, code: 0, message: null, data: real });
+    expect(ktWeightPoints(res.data)).toEqual([G1, G2]);
+  });
+
+  it('reads the plain-array shape', async () => {
+    const { res } = await weight([G1, G2]);
+    expect(ktWeightPoints(res.data)).toEqual([G1, G2]);
+  });
+
+  it('drops a malformed entry without failing the response', async () => {
+    const { res } = await weight({ ...real, target: [{ from: 'yesterday' }, G1, 'junk', null] });
+    expect(ktWeightPoints(res.data)).toEqual([G1]);
+  });
+
+  it('returns no points for null data, a missing target, and rejects a wrong type', async () => {
+    expect(ktWeightPoints((await weight(null)).res.data)).toEqual([]);
+    expect(ktWeightPoints((await weight({ type: 'weight', target: null })).res.data)).toEqual([]);
+    const bad = await caught(new KalorickeTabulkyClient({ token: TOKEN, fetch: fakeKt({ route: () => ok({ type: 'energy' }) }).fetchFn }).getWeight('2026-10-18', '2026-11-17'));
+    expect(bad.code).toBe('BAD_RESPONSE');
   });
 });
 

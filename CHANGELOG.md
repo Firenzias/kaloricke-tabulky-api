@@ -5,6 +5,17 @@ All notable changes to this package are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). See "Versioning" in the readme for what counts as the
 public API.
 
+## [1.3.1] - 2026-11-24
+
+### Security
+- Upgraded `zod` to `^4.6.7` (fixes GHSA-mrhx-c7xc-m3w5, memory exhaustion on oversized constrained collections) and
+  the dev dependency `vitest` to `^5.1.1` (fixes the `@vitest/mocker` and `tinypool` advisories). `npm audit` is clean.
+
+### Changed
+- Exported schemas are now zod 4 schemas and the inferred types are unchanged. Consumers must use zod 4 if they
+  compose these schemas. The `message` of a `BAD_RESPONSE` error now carries zod 4's wording (for example
+  `Invalid input: expected string, received undefined.` instead of `Required.`); the `code` is unchanged.
+
 ## [1.3.0] - 2026-11-24
 
 ### Added
@@ -30,5 +41,6 @@ public API.
 
 Not tracked in this file; see the git history.
 
+[1.3.1]: https://github.com/Firenzias/kaloricke-tabulky-api/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Firenzias/kaloricke-tabulky-api/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Firenzias/kaloricke-tabulky-api/compare/ad0ccb6...v1.2.0

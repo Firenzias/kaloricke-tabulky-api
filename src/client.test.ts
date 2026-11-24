@@ -1,6 +1,18 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { flattenKtSeriesValues, hashKtPassword, ktWeightPoints, isKalorickeTabulkyError, KalorickeTabulkyClient, KalorickeTabulkyError, toKtDate, toKtRange } from './index.js';
-import type { FetchLike } from './index.js';
+import {
+  flattenKtSeriesValues,
+  hashKtPassword,
+  isKalorickeTabulkyError,
+  KalorickeTabulkyClient,
+  KalorickeTabulkyError,
+  ktProfileGoalsSchema,
+  ktWeightPoints,
+  toKtDate,
+  toKtProfileGoals,
+  toKtRange,
+} from './index.js';
+import type { FetchLike, KtProfileGoals } from './index.js';
 
 const TOKEN = 'bead807bac9ceeb6588f10667d78a9f7';
 const FRESH = 'fresh0000000000000000000000token';
@@ -36,7 +48,9 @@ interface Sent {
  * Fake kaloricketabulky.cz: `/login/create` hands out `FRESH` for the right credentials,
  * statistic endpoints accept only tokens in `valid` (others get the login page).
  */
-function fakeKt(opts: { valid?: string[]; loginCode?: number; route?: (url: string) => Response | undefined } = {}) {
+function fakeKt(
+  opts: { valid?: string[]; loginCode?: number; route?: (url: string) => Response | undefined; profile?: (token: string) => Response } = {},
+) {
   const valid = new Set(opts.valid ?? [TOKEN, FRESH]);
   const sent: Sent[] = [];
   const fetchFn: FetchLike = async (url, init) => {
@@ -64,6 +78,7 @@ function fakeKt(opts: { valid?: string[]; loginCode?: number; route?: (url: stri
     if (url.includes('/statistic/nutrients/')) return ok(NUTRIENTS);
     if (url.includes('/statistic/summary/')) return ok({ monthWeight: [{ description: '16.11.2026', value: 79.5 }] });
     if (url.includes('/user/weight/add')) return ok(null);
+    if (url.includes('/user/settings/profile/form')) return opts.profile?.(token) ?? json(ktProfile());
     return new Response('not found', { status: 404 });
   };
   return { fetchFn, sent };
@@ -379,5 +394,136 @@ describe('e-mail/password client', () => {
     expect(await client.login()).toBe(FRESH);
     expect(new KalorickeTabulkyClient({ token: TOKEN }).canLogin()).toBe(false);
     expect((await caught(new KalorickeTabulkyClient({ token: TOKEN }).login())).code).toBe('SESSION_EXPIRED');
+  });
+});
+
+/* ---------- profile goals (synthetic fixture; every value is fake) ---------- */
+
+const PROFILE_PII = {
+  email: 'profile-owner@example.com',
+  guid: 'f0000000-0000-4000-8000-0000000000a7',
+  weight: 81.37,
+  height: 183,
+  birthYear: 1987,
+  computed: 2468,
+};
+const ktProfile = (over: Record<string, unknown> = {}) => ({
+  code: 0,
+  data: {
+    guid: PROFILE_PII.guid,
+    email: PROFILE_PII.email,
+    weight: PROFILE_PII.weight,
+    height: PROFILE_PII.height,
+    birthYear: PROFILE_PII.birthYear,
+    sex: 'MARKER-SEX',
+    subscription: { plan: 'MARKER-SUBSCRIPTION', paidUntil: 'MARKER-PAYMENT' },
+    agreements: [{ code: 'MARKER-AGREEMENT', accepted: true }],
+    computedTargetEnergy: PROFILE_PII.computed,
+    energyUnit: 'kcal',
+    ownDailyDose: true,
+    ownTargetEnergy: 2015,
+    ownNutrients: [
+      { code: 'protein', value: 135, computedValue: 151 },
+      { code: 'carbohydrate', value: 200, computedValue: 233 },
+      { code: 'fat', value: 75, computedValue: 69 },
+      { code: 'fiber', value: 31, computedValue: 29 },
+    ],
+    ...over,
+  },
+});
+const PROFILE_MARKERS = [PROFILE_PII.email, PROFILE_PII.guid, '81.37', '1987', '2468', '151', '233', 'MARKER-'];
+const GOALS = { ownTargets: true, energyUnit: 'kcal', energyKcal: 2015, proteinG: 135, carbohydrateG: 200, fatG: 75 };
+const profileClient = (body: unknown) => new KalorickeTabulkyClient({ token: TOKEN, fetch: fakeKt({ profile: () => json(body) }).fetchFn });
+const goalsFor = (over: Record<string, unknown>) => profileClient(ktProfile(over)).getProfileGoals();
+
+describe('profile goals', () => {
+  it('#G01 reads the goal fields with one GET and the session cookies', async () => {
+    const kt = fakeKt();
+    const goals = await new KalorickeTabulkyClient({ token: TOKEN, fetch: kt.fetchFn }).getProfileGoals();
+    expect(goals).toEqual(GOALS);
+    expect(kt.sent).toHaveLength(1);
+    expect(kt.sent[0]?.method).toBe('GET');
+    expect(kt.sent[0]?.url).toBe('https://www.kaloricketabulky.cz/user/settings/profile/form?format=json');
+    expect(kt.sent[0]?.cookie).toBe(`org.springframework.web.servlet.i18n.CookieLocaleResolver.LOCALE=cs; kaloricketabulky_token=${TOKEN}`);
+  });
+
+  it('#G02 renews an expired session once, or fails like the statistic calls', async () => {
+    const expired = (token: string) => (token === TOKEN ? json({ requestId: null, code: 3, message: 'Unauthorized', data: null }) : json(ktProfile()));
+    const kt = fakeKt({ valid: [TOKEN, FRESH], profile: expired });
+    const renewing = new KalorickeTabulkyClient({ email: 'me@example.cz', password: PASSWORD, token: TOKEN, fetch: kt.fetchFn });
+    expect(await renewing.getProfileGoals()).toEqual(GOALS);
+    expect(kt.sent.filter((s) => s.url.includes('/login/'))).toHaveLength(1);
+    expect(kt.sent.filter((s) => s.url.includes('/profile/'))).toHaveLength(2);
+
+    const tokenOnly = new KalorickeTabulkyClient({ token: TOKEN, fetch: fakeKt({ profile: expired }).fetchFn });
+    expect((await caught(tokenOnly.getProfileGoals())).code).toBe('SESSION_EXPIRED');
+
+    const wrong = new KalorickeTabulkyClient({ email: 'me@example.cz', password: 'wrong', fetch: fakeKt().fetchFn });
+    expect((await caught(wrong.getProfileGoals())).code).toBe('LOGIN_FAILED');
+  });
+
+  it('#G03 normalises the unit and the nutrients and keeps fractions', async () => {
+    expect((await goalsFor({ energyUnit: ' KCAL ' })).energyUnit).toBe('kcal');
+    expect((await goalsFor({ energyUnit: 'kJ' })).energyUnit).toBe('other');
+    const withoutUnit = ktProfile();
+    Reflect.deleteProperty(withoutUnit.data, 'energyUnit');
+    expect((await profileClient(withoutUnit).getProfileGoals()).energyUnit).toBeNull();
+
+    const protein = (a: number, b: number) => ({ ownNutrients: [{ code: 'protein', value: a }, { code: 'protein', value: b }] });
+    expect((await goalsFor(protein(135, 135))).proteinG).toBe(135);
+    expect((await goalsFor(protein(135, 136))).proteinG).toBeNull();
+    const noFat = await goalsFor({ ownNutrients: [{ code: 'protein', value: 135 }] });
+    expect(noFat.fatG).toBeNull();
+    expect(noFat.proteinG).toBe(135);
+    expect((await goalsFor({ ownTargetEnergy: 2015.5 })).energyKcal).toBe(2015.5);
+  });
+
+  it('#G04 turns wrongly typed fields into null and rejects a missing data block', async () => {
+    expect((await goalsFor({ ownTargetEnergy: 'x' })).energyKcal).toBeNull();
+    expect((await goalsFor({ ownDailyDose: 'yes' })).ownTargets).toBeNull();
+    expect((await goalsFor({ energyUnit: 5 })).energyUnit).toBeNull();
+    const bad = await goalsFor({ ownNutrients: 'x' });
+    expect([bad.proteinG, bad.carbohydrateG, bad.fatG]).toEqual([null, null, null]);
+    const oneBad = await goalsFor({
+      ownNutrients: [{ code: 1, value: 10 }, { code: 'protein', value: '135' }, { code: 'carbohydrate', value: 200 }],
+    });
+    expect(oneBad).toEqual({ ...GOALS, proteinG: null, fatG: null });
+
+    const noData = ktProfile();
+    Reflect.deleteProperty(noData, 'data');
+    const failures = [
+      profileClient(noData),
+      profileClient({ code: 0, data: null }),
+      new KalorickeTabulkyClient({ token: TOKEN, fetch: fakeKt({ profile: () => new Response('not json', { headers: { 'Content-Type': 'application/json' } }) }).fetchFn }),
+    ];
+    for (const client of failures) {
+      const e = await caught(client.getProfileGoals());
+      expect(e.code).toBe('BAD_RESPONSE');
+      for (const marker of [...PROFILE_MARKERS, '2015', '135']) expect(e.message).not.toContain(marker);
+    }
+  });
+
+  it('#G05 returns only the six goal keys and no profile data', async () => {
+    const client = new KalorickeTabulkyClient({ token: TOKEN, fetch: fakeKt().fetchFn });
+    const goals = await client.getProfileGoals();
+    const text = JSON.stringify(goals);
+    for (const marker of PROFILE_MARKERS) expect(text).not.toContain(marker);
+    expect(Object.keys(goals).sort()).toEqual(['carbohydrateG', 'energyKcal', 'energyUnit', 'fatG', 'ownTargets', 'proteinG']);
+    expect(ktProfileGoalsSchema.strict().safeParse(goals).success).toBe(true);
+    goals.energyKcal = 1;
+    expect((await client.getProfileGoals()).energyKcal).toBe(2015);
+    const source = readFileSync(new URL('./schemas.ts', import.meta.url), 'utf8');
+    const profileSection = source.slice(source.indexOf('/* ---------- /user/settings/profile/form'));
+    expect(profileSection).toContain('ktProfileFormResponseSchema');
+    expect(profileSection).not.toContain('passthrough');
+  });
+
+  it('#G06 exports the schema and the normaliser, and they agree with the client', async () => {
+    expect(toKtProfileGoals(ktProfile())).toEqual(GOALS);
+    expect(toKtProfileGoals(ktProfile())).toEqual(await profileClient(ktProfile()).getProfileGoals());
+    expect(ktProfileGoalsSchema.parse(GOALS)).toEqual(GOALS);
+    const parsed: KtProfileGoals = toKtProfileGoals(ktProfile());
+    expect(parsed.proteinG).toBe(135);
+    expect(() => toKtProfileGoals(JSON.parse('{"code":0}'))).toThrow(KalorickeTabulkyError);
   });
 });

@@ -5,6 +5,14 @@ All notable changes to this package are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). See "Versioning" in the readme for what counts as the
 public API.
 
+## [1.3.0] - 2026-11-24
+
+### Added
+- `getProfileGoals()` for `/user/settings/profile/form?format=json`. It returns only the owner's own calorie and
+  macro goals (`KtProfileGoals`: `ownTargets`, `energyUnit`, `energyKcal`, `proteinG`, `carbohydrateG`, `fatG`);
+  every other profile field (e-mail, weight, guid, …) is stripped inside the package. `ktProfileGoalsSchema`
+  and `toKtProfileGoals()` are exported.
+
 ## [1.2.0] - 2026-11-23
 
 ### Added
@@ -22,4 +30,5 @@ public API.
 
 Not tracked in this file; see the git history.
 
+[1.3.0]: https://github.com/Firenzias/kaloricke-tabulky-api/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Firenzias/kaloricke-tabulky-api/compare/ad0ccb6...v1.2.0

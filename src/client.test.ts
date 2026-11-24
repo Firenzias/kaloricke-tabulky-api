@@ -193,7 +193,7 @@ describe('token client', () => {
     expect([http.code, http.status, http.message]).toEqual(['HTTP', 500, 'energy: HTTP 500']);
     expect((await caught(client(() => new Response('nope')).getEnergy('2026-11-01', '2026-11-17'))).code).toBe('BAD_RESPONSE');
     const shape = await caught(client(() => ok({ unit: 'kcal' })).getEnergy('2026-11-01', '2026-11-17'));
-    expect([shape.code, shape.message]).toEqual(['BAD_RESPONSE', 'Unexpected energy response at data.type: Required.']);
+    expect([shape.code, shape.message]).toEqual(['BAD_RESPONSE', 'Unexpected energy response at data.type: Invalid input: expected string, received undefined.']);
     const optionalShape = await caught(client(() => ok({ type: 'x', values: [] })).getOptionalStats('2026-11-01', '2026-11-17'));
     expect(optionalShape.code).toBe('BAD_RESPONSE');
 

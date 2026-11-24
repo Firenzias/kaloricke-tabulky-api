@@ -28,7 +28,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -36,6 +36,6 @@
     "eslint": "^9.39.5",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.73.0",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.1"
   }
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { KalorickeTabulkyError } from './errors.js';
 
 /*
  * Response schemas of the Kalorické tabulky JSON API. They are deliberately lenient about optional
@@ -184,3 +185,61 @@ export const ktWeightSummaryResponseSchema = envelope(
 export type KtWeightSummaryResponse = z.infer<typeof ktWeightSummaryResponseSchema>;
 
 export const ktLoginResponseSchema = ktEnvelopeSchema;
+
+/* ---------- /user/settings/profile/form: the goal fields only ---------- */
+
+/** A non-number becomes `null`, never an error. */
+const profileNumberSchema = z.number().finite().nullish().catch(null);
+/** `computedValue` and every other key are stripped. */
+const profileNutrientSchema = z.object({ code: z.string().max(32), value: profileNumberSchema }).nullable().catch(null);
+
+/** Raw `/user/settings/profile/form` answer, reduced to the goal fields. Every other key is stripped (PII never passes). */
+export const ktProfileFormResponseSchema = z.object({
+  code: z.number(),
+  data: z.object({
+    ownDailyDose: z.boolean().nullish().catch(null),
+    energyUnit: z.string().max(16).nullish().catch(null),
+    ownTargetEnergy: profileNumberSchema,
+    ownNutrients: z.array(profileNutrientSchema).nullish().catch(null),
+  }),
+});
+export type KtProfileFormResponse = z.infer<typeof ktProfileFormResponseSchema>;
+
+/** The minimal payload `getProfileGoals()` returns. `null` = absent, wrong type, or ambiguous in KT. */
+export const ktProfileGoalsSchema = z
+  .object({
+    /** `ownDailyDose`: true = the owner's own targets are active. */
+    ownTargets: z.boolean().nullable(),
+    /** `energyUnit` reduced to a closed set; the raw KT string is never returned. */
+    energyUnit: z.enum(['kcal', 'other']).nullable(),
+    energyKcal: z.number().finite().nullable(),
+    proteinG: z.number().finite().nullable(),
+    carbohydrateG: z.number().finite().nullable(),
+    fatG: z.number().finite().nullable(),
+  })
+  .strict();
+export type KtProfileGoals = z.infer<typeof ktProfileGoalsSchema>;
+
+/** One macro goal: the shared value of all entries with `code`, or `null` when absent, differing or valueless. */
+function macroGoal(nutrients: KtProfileFormResponse['data']['ownNutrients'], code: string): number | null {
+  const values = (nutrients ?? []).flatMap((n) => (n !== null && n.code === code ? [n.value ?? null] : []));
+  const first = values[0];
+  if (first === undefined || first === null) return null;
+  return values.every((v) => v === first) ? first : null;
+}
+
+/** Builds the minimal goals object from a raw profile answer; a missing `data` throws `BAD_RESPONSE`. */
+export function toKtProfileGoals(raw: unknown): KtProfileGoals {
+  const parsed = ktProfileFormResponseSchema.safeParse(raw);
+  if (!parsed.success) throw new KalorickeTabulkyError('BAD_RESPONSE', 'Unexpected profile response.');
+  const { data } = parsed.data;
+  const unit = data.energyUnit == null ? null : data.energyUnit.trim().toLowerCase() === 'kcal' ? 'kcal' : 'other';
+  return ktProfileGoalsSchema.parse({
+    ownTargets: data.ownDailyDose ?? null,
+    energyUnit: unit,
+    energyKcal: data.ownTargetEnergy ?? null,
+    proteinG: macroGoal(data.ownNutrients, 'protein'),
+    carbohydrateG: macroGoal(data.ownNutrients, 'carbohydrate'),
+    fatG: macroGoal(data.ownNutrients, 'fat'),
+  });
+}

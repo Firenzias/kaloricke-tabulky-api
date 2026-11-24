@@ -9,10 +9,12 @@ import {
   ktLoginResponseSchema,
   ktNutrientsResponseSchema,
   ktOptionalStatsResponseSchema,
+  ktProfileFormResponseSchema,
   ktWeightResponseSchema,
   ktWeightSummaryResponseSchema,
+  toKtProfileGoals,
 } from './schemas.js';
-import type { KtEnergyResponse, KtNutrientsResponse, KtOptionalStatsResponse, KtWeightResponse } from './schemas.js';
+import type { KtEnergyResponse, KtNutrientsResponse, KtOptionalStatsResponse, KtProfileGoals, KtWeightResponse } from './schemas.js';
 
 export const KT_BASE_URL = 'https://www.kaloricketabulky.cz';
 export const KT_TOKEN_COOKIE = 'kaloricketabulky_token';
@@ -231,6 +233,12 @@ export class KalorickeTabulkyClient {
   async getWeightSummary(date: KtDateInput = new Date()): Promise<{ date: string; weightKg: number }[]> {
     const res = await this.#authed(`/statistic/summary/${toKtDate(date)}/get?format=json`, ktWeightSummaryResponseSchema, 'summary');
     return res.data.monthWeight.map((item) => ({ date: item.description, weightKg: item.value }));
+  }
+
+  /** `/user/settings/profile/form` – the owner's own calorie and macro goals only; every other profile field is dropped. */
+  async getProfileGoals(): Promise<KtProfileGoals> {
+    const res = await this.#authed('/user/settings/profile/form?format=json', ktProfileFormResponseSchema, 'profile');
+    return toKtProfileGoals(res);
   }
 
   /** `/user/weight/add` – records a weight for `date` (default today). */

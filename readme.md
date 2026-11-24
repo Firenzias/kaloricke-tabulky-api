@@ -44,6 +44,7 @@ Dates are local calendar days given as `YYYY-MM-DD`, `DD.MM.YYYY` or a `Date`.
 | `getNutrients(from, to)` | `/statistic/nutrients/{from}/{to}/get?format=json` |
 | `getWeight(from, to)` | `/statistic/weight/{from}/{to}/get?format=json` |
 | `getWeightSummary(date?)` | `/statistic/summary/{date}/get?format=json` |
+| `getProfileGoals()` | `/user/settings/profile/form?format=json` (only the calorie and macro goals; every other profile field is dropped) |
 | `recordWeight(kg, date?)` | `POST /user/weight/add?format=json` |
 | `login()` | `POST /login/create?format=json` (returns the new token) |
 | `getToken()` / `canLogin()` | the current session token, and whether e-mail/password is set |
